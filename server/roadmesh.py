@@ -977,6 +977,101 @@ def steps(parts):
     return (np.concatenate(P), np.concatenate(T), np.concatenate(UV), mats, np.asarray(tri_mat, np.int64))
 
 
+RAIL_GAUGE_M = 1.435          # m, standard gauge between the running rails' centres
+RAIL_HEAD_W = 0.07            # m, a rail head (the wheels ride on it)
+RAIL_TOP_M = 0.47             # m, the rail head over the ground: ballast crown + the rail on its sleeper
+BALLAST_TOP_M = 0.30          # m, the ballast's crown over the ground beside the track
+BALLAST_WIDE_M = 1.5          # m the ballast's side slopes run out for every metre of its height
+THIRD_RAIL_OFF_M = 0.55       # m, a conductor rail's centre outside the running rail's
+THIRD_RAIL_W_M = 0.09         # m
+THIRD_RAIL_TOP_M = 0.32       # m over the ground (it sits on insulators, under a cover board)
+RAIL_MATS = ["m_gm_concrete_plain", "m_gm_metal_hotspotting", "m_gm_concrete_plain_track"]
+# (ballast/sleepers: gridmap v2's concrete, a regular material; rails: its metal; the third rail's cover: the track slab)
+
+
+def rail(parts):
+    """Railways as one colliding mesh: the ballast prism, the two running rails at gauge and, where the line is a
+    third-rail one, the conductor rail outside them. At a level crossing (a road across the track: part["crossings"],
+    (s0, s1) ranges along the way) the ballast and its slopes are left out and the rails lie flush with the road,
+    as a real crossing's do — no hump under the wheels. (positions, tris, uvs, materials, tri material index) or
+    None. Pure.
+
+    parts: {pts: (k, 3) centreline x, y, ground z; third: bool; crossings: [(s0, s1)]; step: m between samples}."""
+    P, T, UV, M = [], [], [], []
+    nv = 0
+    for part in parts:
+        pts = np.asarray(part["pts"], np.float64)
+        if len(pts) < 2:
+            continue
+        third = bool(part.get("third"))
+        step = float(part.get("step", 1.0))
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts[:, :2], axis=0).T))]
+        if s[-1] < step:
+            continue
+        n = max(2, int(math.ceil(s[-1] / step)) + 1)
+        ss = np.linspace(0.0, s[-1], n)
+        x = np.interp(ss, s, pts[:, 0])
+        y = np.interp(ss, s, pts[:, 1])
+        z = np.interp(ss, s, pts[:, 2])
+        tx, ty = np.gradient(x), np.gradient(y)
+        ln = np.maximum(np.hypot(tx, ty), 1e-9)
+        nx, ny = -ty / ln, tx / ln                   # unit normal, left
+        cross = np.zeros(n, bool)
+        for a, b in part.get("crossings", ()):
+            cross |= (ss >= a) & (ss <= b)
+
+        def quad_strip(a0, a1, mat, top=None, skip=False):
+            nonlocal nv
+            if skip:
+                return
+            base = nv
+            P.append(np.stack([a0[:-1], a1[:-1], a1[1:], a0[1:]], axis=1).reshape(-1, 3))
+            UV.append(np.zeros((4 * (len(a0) - 1), 2)))
+            i = np.arange(len(a0) - 1)
+            T.append((base + np.stack([4 * i, 4 * i + 1, 4 * i + 2], axis=1)).tolist() +
+                     (base + np.stack([4 * i, 4 * i + 2, 4 * i + 3], axis=1)).tolist())
+            M.extend([mat] * (2 * (len(a0) - 1)))
+            nv += 4 * (len(a0) - 1)
+
+        half = RAIL_GAUGE_M / 2.0
+        ball_half = BALLAST_WIDE_M * BALLAST_TOP_M + 1.7
+        ground = np.c_[x, y, z]
+        crown = np.c_[x, y, z + BALLAST_TOP_M]
+        # the ballast: crown, then its two slopes down to the ground (left out across a level crossing)
+        left_crown = crown + np.c_[nx, ny, np.zeros(n)] * 1.7
+        right_crown = crown - np.c_[nx, ny, np.zeros(n)] * 1.7
+        left_foot = ground + np.c_[nx, ny, np.zeros(n)] * ball_half
+        right_foot = ground - np.c_[nx, ny, np.zeros(n)] * ball_half
+        for arr0, arr1, m in ((left_crown, right_crown, 0), (left_crown, left_foot, 0), (right_crown, right_foot, 0)):
+            keep = ~cross
+            if keep.any():
+                # split at the crossings: each un-crossed run is its own quad strip
+                idx = np.flatnonzero(keep)
+                for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
+                    if len(run) >= 2:
+                        quad_strip(arr0[run], arr1[run], 0)
+        # the running rails: a box each (top and both sides); flush with the road across a crossing, on the
+        # ballast elsewhere
+        for side in (-1.0, 1.0):
+            mid = np.c_[x, y, np.zeros(n)] + (np.c_[nx, ny, np.zeros(n)] * side * half)
+            top_z = np.where(cross, z + 0.02, z + RAIL_TOP_M)
+            bot_z = np.where(cross, z - 0.12, z + BALLAST_TOP_M)
+            left = mid - np.c_[nx, ny, np.zeros(n)] * RAIL_HEAD_W / 2
+            right = mid + np.c_[nx, ny, np.zeros(n)] * RAIL_HEAD_W / 2
+            quad_strip(np.c_[left[:, :2], top_z], np.c_[right[:, :2], top_z], 1)       # the head
+            quad_strip(np.c_[left[:, :2], top_z], np.c_[left[:, :2], bot_z], 1)        # its two sides
+            quad_strip(np.c_[right[:, :2], top_z], np.c_[right[:, :2], bot_z], 1)
+        if third:
+            mid = np.c_[x, y, np.zeros(n)] + np.c_[nx, ny, np.zeros(n)] * (half + THIRD_RAIL_OFF_M)
+            a = mid - np.c_[nx, ny, np.zeros(n)] * THIRD_RAIL_W_M / 2
+            b = mid + np.c_[nx, ny, np.zeros(n)] * THIRD_RAIL_W_M / 2
+            quad_strip(np.c_[a[:, :2], z + THIRD_RAIL_TOP_M], np.c_[b[:, :2], z + THIRD_RAIL_TOP_M], 2)
+    if not T:
+        return None
+    return (np.concatenate(P), np.concatenate(T), np.concatenate(UV), list(RAIL_MATS),
+            np.asarray(M, np.int64))
+
+
 def write(path, mesh):
     P, T, UV, mats, M = mesh
     return cdae.write(path, P, T, uvs=UV, material=mats, tri_materials=M, object_name="road")

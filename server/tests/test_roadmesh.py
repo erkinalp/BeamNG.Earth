@@ -91,6 +91,37 @@ class RoadMeshTest(unittest.TestCase):
         self.assertAlmostEqual(area, 11.0 * L, delta=1.0)
 
 
+class RailTest(unittest.TestCase):
+    def way(self, third=False, crossings=(), length=60.0):
+        return [{"pts": np.array([[0.0, 0.0, 10.0], [length, 0.0, 10.0]]), "third": third, "crossings": list(crossings)}]
+
+    def test_two_running_rails_one_gauge_apart_on_the_ballast(self):
+        P, T, _UV, mats, M = roadmesh.rail(self.way())
+        self.assertEqual(mats, roadmesh.RAIL_MATS)
+        rails = P[np.unique(T[M == 1].ravel())]
+        span = float(rails[:, 1].max() - rails[:, 1].min())
+        self.assertAlmostEqual(span, roadmesh.RAIL_GAUGE_M + roadmesh.RAIL_HEAD_W, places=6)
+        self.assertAlmostEqual(float(P[:, 2].max()), 10.0 + roadmesh.RAIL_TOP_M, places=6)
+        self.assertAlmostEqual(float(P[:, 1].max() - P[:, 1].min()), 4.3, places=6, msg="the ballast's footprint")
+
+    def test_a_level_crossing_is_flush_and_has_no_ballast(self):
+        P, T, _UV, _mats, M = roadmesh.rail(self.way(crossings=[(0.0, 60.0)]))
+        self.assertFalse((M == 0).any(), "no ballast where a road crosses the track")
+        self.assertAlmostEqual(float(P[:, 2].max()), 10.02, places=6, msg="the rails lie flush with the road")
+        self.assertLess(len(T), len(roadmesh.rail(self.way())[1]), "the ballast's strips are gone")
+
+    def test_the_third_rail_lies_outside_the_running_rails(self):
+        P, T, _UV, mats, M = roadmesh.rail(self.way(third=True))
+        self.assertIn(2, set(M.tolist()), "the conductor rail has its own material")
+        conductor = P[np.unique(T[M == 2].ravel())]
+        self.assertGreater(float(conductor[:, 1].min()), roadmesh.RAIL_GAUGE_M / 2,
+                           "outside the running rail, on one side")
+        self.assertAlmostEqual(float(conductor[:, 2].max()), 10.0 + roadmesh.THIRD_RAIL_TOP_M, places=6)
+
+    def test_nothing_for_a_way_shorter_than_a_sample(self):
+        self.assertIsNone(roadmesh.rail([{"pts": np.array([[0.0, 0.0, 0.0], [0.2, 0.0, 0.0]]), "third": False}]))
+
+
 class StepsTest(unittest.TestCase):
     def test_risers_are_fixed_and_treads_follow_the_ways_rise(self):
         # 1.2 m of climb: 1.2 / 0.15 = 8 risers, and the treads take up the 10 m way (1.25 m each)
