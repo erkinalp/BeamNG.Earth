@@ -914,8 +914,9 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
     return nv
 
 
-STEPS_RUN_M = 0.30         # m, a step's tread along the way
-STEPS_RISE_M = 0.15        # m, a nominal riser (a way's own rise per run wins where it is steeper)
+STEPS_RISE_M = 0.15        # m, a riser (the building-code stair): the number of steps follows the way's own rise
+STEPS_RUN_M = 0.30         # m, the tread that rise implies on a building-code stair; a gentler flight gets longer
+                           # treads rather than thinner risers (2026-10-22)
 STEPS_UV_M = 1.0           # m of texture per metre
 STEPS_MAT = "m_gm_concrete_plain"   # gridmap v2's plain concrete (a regular material, usable on a mesh)
 
@@ -935,16 +936,20 @@ def steps(parts):
         if len(pts) < 2:
             continue
         w = float(part.get("w", 3.0))
-        run = float(part.get("run", STEPS_RUN_M))
         mat = str(part.get("mat", STEPS_MAT))
         if mat not in mats:
             mats.append(mat)
         mi = mats.index(mat)
         s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts[:, :2], axis=0).T))]
-        if s[-1] < run:
+        if s[-1] < 0.05:
             continue
+        # the risers are fixed and the treads take up the way's length: a gentle flight gets long treads
+        rise = abs(float(pts[-1, 2]) - float(pts[0, 2]))
+        n = max(1, int(round(rise / STEPS_RISE_M))) if rise > STEPS_RISE_M / 2.0 else 1
+        run = float(part.get("run", s[-1] / n))
+        n = max(1, int(math.floor(s[-1] / run)))
         half = w / 2.0
-        for i in range(max(1, int(math.floor(s[-1] / run)))):
+        for i in range(n):
             s0, s1 = i * run, (i + 1) * run
             x0, y0, z0 = (float(np.interp(s0, s, pts[:, k])) for k in range(3))
             x1, y1, z1 = (float(np.interp(s1, s, pts[:, k])) for k in range(3))
@@ -955,7 +960,8 @@ def steps(parts):
                               [x1 - nx, y1 - ny, z0], [x1 + nx, y1 + ny, z0]])
             riser = np.array([[x1 - nx, y1 - ny, z0], [x1 + nx, y1 + ny, z0],
                               [x1 + nx, y1 + ny, z1], [x1 - nx, y1 - ny, z1]])
-            for quad, along0, along1 in ((tread, s0, s1), (riser, s1, s1)):
+            quads = [(tread, s0, s1)] + ([] if abs(z1 - z0) < 1e-6 else [(riser, s1, s1)])
+            for quad, along0, along1 in quads:
                 P.append(quad)
                 UV.append(np.array([[0.0, along0 / STEPS_UV_M], [w / STEPS_UV_M, along0 / STEPS_UV_M],
                                     [w / STEPS_UV_M, along1 / STEPS_UV_M], [0.0, along1 / STEPS_UV_M]]))
