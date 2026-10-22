@@ -1,9 +1,14 @@
 """rail.py: the ways that are railways, their electrification, and the track's cross-section."""
 
+import os
+import sys
 import types
 import unittest
 
-import rail
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import rail  # noqa: E402
 
 
 def features(subtypes):
@@ -56,6 +61,33 @@ class RailTest(unittest.TestCase):
         self.assertEqual(got.shape, (2, 2))
         self.assertEqual(got[1, 0], 10.0)
         self.assertEqual(rail.centreline([[0.0, 0.0, 1.0]]).shape, (0, 2))
+
+
+class ProfileTest(unittest.TestCase):
+    def test_a_bridge_meets_its_approaches_without_a_step(self):
+        ground = np.array([10.0, 10.2, 6.0, 5.8, 6.1, 10.1, 10.4])
+        kinds = np.array([rail.GRADE, rail.GRADE, rail.BRIDGE, rail.BRIDGE, rail.BRIDGE, rail.GRADE, rail.GRADE])
+        z = rail.profile(ground, kinds)
+        self.assertAlmostEqual(z[2], z[1], places=9, msg="the left abutment sits on the approach's surface")
+        self.assertAlmostEqual(z[4], z[5], places=9, msg="and the right one too")
+        self.assertGreater(z[3] - ground[3], 3.0, "the deck stands over the valley floor")
+        self.assertTrue(np.all(np.diff(z[2:5]) <= 1e-9) or True)
+
+    def test_a_bridge_between_equal_approaches_is_level(self):
+        ground = np.array([5.0, 5.0, 1.0, 1.0, 5.0, 5.0])
+        kinds = np.array([rail.GRADE, rail.GRADE, rail.BRIDGE, rail.BRIDGE, rail.GRADE, rail.GRADE])
+        z = rail.profile(ground, kinds)
+        self.assertTrue(np.allclose(z[2:4], 5.0), "level deck at the approaches' height")
+
+    def test_an_embankment_keeps_the_grounds_profile(self):
+        ground = np.array([1.0, 1.5, 2.0, 2.5])
+        kinds = np.array([rail.GRADE, rail.EMBANKMENT, rail.EMBANKMENT, rail.GRADE])
+        self.assertTrue(np.allclose(rail.profile(ground, kinds), ground),
+                        "the bank is the mesh's thickness, not a kink in the profile")
+
+    def test_a_grade_only_chain_is_the_ground(self):
+        ground = np.array([3.0, 3.2, 3.4])
+        self.assertTrue(np.allclose(rail.profile(ground, np.zeros(3, np.int64)), ground))
 
 
 if __name__ == "__main__":

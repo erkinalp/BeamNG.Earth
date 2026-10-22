@@ -61,6 +61,38 @@ def lift(part):
     return BALLAST_TOP - 0.02
 
 
+GRADE, BRIDGE, TUNNEL, EMBANKMENT = 0, 1, 2, 3
+
+
+def profile(ground, kinds):
+    """One height profile along a rail chain, so its parts join without a step: grade and tunnel follow the ground,
+    a bridge runs straight between the heights of the ground at its two ends (which are the neighbours' own heights,
+    at the abutments), and an embankment keeps the ground's height under its earthwork — the bank is a mesh
+    thickness, not a kink in the profile. ground: (n,) DEM z at the samples; kinds: (n,) GRADE/BRIDGE/TUNNEL/
+    EMBANKMENT. Returns z (n,), continuous at every boundary by construction. Pure.
+
+    The abutment is the whole point: a bridge resolved apart from its approaches agrees with them only by luck, and
+    a step there is what a player sees first (2026-10-22)."""
+    z = np.asarray(ground, np.float64).copy()
+    k = np.asarray(kinds, np.int64)
+    if len(z) < 2:
+        return z
+    i = 0
+    while i < len(k):
+        if k[i] != BRIDGE:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(k) and k[j + 1] == BRIDGE:
+            j += 1
+        # the ends take the neighbours' heights: the abutments meet the approach surfaces exactly
+        left = z[i - 1] if i > 0 else z[i]
+        right = z[j + 1] if j + 1 < len(z) else z[j]
+        z[i:j + 1] = np.linspace(left, right, j - i + 1)
+        i = j + 1
+    return z
+
+
 def centreline(xy):
     """A rail way's centreline as float64 (n, 2) in metres; empty for fewer than two points."""
     a = np.asarray(xy, np.float64)[:, :2]
