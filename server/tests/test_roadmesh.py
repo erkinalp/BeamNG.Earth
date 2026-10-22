@@ -109,6 +109,15 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(len(stairs[1]), 4 * 6, "0.9 / 0.15 = 6 risers over 3 m: 0.5 m treads")
         self.assertAlmostEqual(stairs[0][:, 0].max(), 3.0, places=6)
 
+    def test_a_way_too_steep_for_code_stairs_is_not_a_ladder(self):
+        # 2 m of climb in 2 m of way: code stairs would need 13 risers of 0.15 m (0.154 m treads). The tread may not
+        # go under 0.2 m, so it gets 10 taller risers (0.2 m) instead.
+        P, T, _UV, _mats, _M = roadmesh.steps([{"pts": np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 2.0]]), "w": 2.0}])
+        n = len(T) // 4
+        self.assertEqual(n, 10, "floor(2.0 / 0.2): the fewest risers that keep the tread legal")
+        self.assertGreaterEqual(2.0 / n, roadmesh.STEPS_MIN_RUN_M - 1e-9, "the tread is never a ladder rung")
+        self.assertGreaterEqual(2.0 / n, roadmesh.STEPS_RISE_M - 1e-9, "taller risers, not shorter treads")
+
     def test_a_flat_way_is_one_flat_tread(self):
         P, T, _UV, _mats, _M = roadmesh.steps([{"pts": np.array([[0.0, 0.0, 5.0], [3.0, 0.0, 5.0]]), "w": 2.0}])
         self.assertEqual(len(T), 2, "no riser where the ground does not rise")

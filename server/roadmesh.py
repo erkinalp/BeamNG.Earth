@@ -917,6 +917,8 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
 STEPS_RISE_M = 0.15        # m, a riser (the building-code stair): the number of steps follows the way's own rise
 STEPS_RUN_M = 0.30         # m, the tread that rise implies on a building-code stair; a gentler flight gets longer
                            # treads rather than thinner risers (2026-10-22)
+STEPS_MIN_RUN_M = 0.20     # m: a shorter tread is a ladder, so a way too steep for code stairs gets fewer, taller
+                           # risers instead (2026-10-22)
 STEPS_UV_M = 1.0           # m of texture per metre
 STEPS_MAT = "m_gm_concrete_plain"   # gridmap v2's plain concrete (a regular material, usable on a mesh)
 
@@ -943,10 +945,12 @@ def steps(parts):
         s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts[:, :2], axis=0).T))]
         if s[-1] < 0.05:
             continue
-        # the risers are fixed and the treads take up the way's length: a gentle flight gets long treads
+        # the risers are fixed and the treads take up the way's length: a gentle flight gets long treads; a way too
+        # steep for code stairs gets fewer, taller risers, because a tread under STEPS_MIN_RUN_M is a ladder
         rise = abs(float(pts[-1, 2]) - float(pts[0, 2]))
-        n = max(1, int(round(rise / STEPS_RISE_M))) if rise > STEPS_RISE_M / 2.0 else 1
-        run = float(part.get("run", s[-1] / n))
+        want = max(1, int(round(rise / STEPS_RISE_M))) if rise > STEPS_RISE_M / 2.0 else 1
+        most = max(1, int(math.floor(s[-1] / STEPS_MIN_RUN_M)))
+        run = float(part.get("run", s[-1] / max(1, min(want, most))))
         n = max(1, int(math.floor(s[-1] / run)))
         half = w / 2.0
         for i in range(n):
