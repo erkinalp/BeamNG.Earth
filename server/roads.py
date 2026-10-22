@@ -3329,6 +3329,73 @@ DECK_CONTEXT_M = 24.0   # m around a tile its bridges' decks are passed as conte
                         # in the next tile, Queensboro Bridge 2026-10-17)
 
 
+RAIL_STEP_M = 1.0          # m between a rail way's samples
+RAIL_CROSS_MARGIN_M = 0.3  # m the rail's own width adds to a road's half width in the crossing test
+
+
+def rail_parts(frame, tx, ty, cells, elev, reach=RAIL_STEP_M):
+    """The rail ways near a tile as roadmesh.rail parts: each way sampled on the frame at RAIL_STEP_M, one profile
+    per chain (rail.profile: grade follows the ground, a bridge meets its approaches at the abutments), the third
+    rail where the class has one, and the level crossings where a road surface crosses an **at-grade** stretch —
+    a bridge or an embankment part over a road is not a level crossing (rail.rail leaves those to their structure).
+    Pure given its inputs."""
+    import rail as railmod
+    x0, y0, x1, y1 = tile_bbox(tx, ty)
+    box = (x0 - reach, y0 - reach, x1 + reach, y1 + reach)
+    roads_xy, rseen = [], set()
+    for feats in cells:
+        if feats is None or len(feats) == 0:
+            continue
+        specs = road_specs(feats, None, None, False)
+        for i in range(len(feats)):
+            if specs[i] is None or str(feats.ids[i]) in rseen:
+                continue
+            rseen.add(str(feats.ids[i]))
+            for ring in ground_parts(feats, i):
+                e, n = mapgeom.enu_xy(feats, frame, ring)
+                roads_xy.append((np.c_[e, n], specs[i].width / 2.0))
+    parts, seen = [], set()
+    for feats in cells:
+        if feats is None or len(feats) == 0:
+            continue
+        for i in railmod.is_rail(feats):
+            fid = str(feats.ids[i])
+            if fid in seen:
+                continue
+            seen.add(fid)
+            a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
+            b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
+            ring = feats.lonlat[a:b]
+            if len(ring) < 2:
+                continue
+            e, n = mapgeom.enu_xy(feats, frame, ring)
+            e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+            if e.max() < box[0] or e.min() > box[2] or n.max() < box[1] or n.min() > box[3]:
+                continue
+            s = np.r_[0.0, np.cumsum(np.hypot(np.diff(e), np.diff(n)))]
+            if s[-1] < RAIL_STEP_M:
+                continue
+            ss = np.linspace(0.0, s[-1], max(2, int(math.ceil(s[-1] / RAIL_STEP_M)) + 1))
+            xs, ys = np.interp(ss, s, e), np.interp(ss, s, n)
+            la, lo, _ = frame.enu_to_geodetic(xs, ys, 0.0)
+            ground = np.asarray(elev(la, lo), np.float64)
+            kinds = np.zeros(len(ss), np.int64)
+            for ra, rb, kind in level_ranges(feats, i):
+                sel = (ss >= ra * s[-1]) & (ss <= rb * s[-1])
+                kinds[sel] = railmod.BRIDGE if kind == "bridge" else railmod.TUNNEL
+            z = railmod.profile(ground, kinds)
+            cls = feats.attrs["class"][i] if "class" in feats.attrs else ""
+            third = railmod.electrification(cls) == "third_rail"
+            cross = []
+            for ca, cb in railmod.crossing_ranges(np.c_[xs, ys], ss, roads_xy, RAIL_CROSS_MARGIN_M):
+                k = int(np.argmin(np.abs(ss - 0.5 * (ca + cb))))
+                if kinds[k] == railmod.GRADE:          # a bridge or bank over the road is not a crossing
+                    cross.append((ca, cb))
+            parts.append({"pts": np.c_[xs - x0, ys - y0, z], "third": third, "crossings": cross,
+                          "step": RAIL_STEP_M})
+    return parts
+
+
 def _deck_chunks(decks, exact):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
     within DECK_CONTEXT_M of it as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck)."""
@@ -3728,7 +3795,7 @@ def shape_files(aid, tx, ty):
 
 
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
-               props=None, wires=None, park=None, tunnel_mesh=None):
+               props=None, wires=None, park=None, tunnel_mesh=None, rail_mesh=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -3751,6 +3818,11 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         shape = f"deck_{aid}_{tx}_{ty}.cdae"
         roadmesh.write(os.path.join(out_dir, shape), deck_mesh)
         data["deck"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+    if rail_mesh is not None:       # roadmesh.rail: the track (ballast, rails, third rail; colliding)
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        shape = f"rail_{aid}_{tx}_{ty}.cdae"
+        roadmesh.write(os.path.join(out_dir, shape), rail_mesh)
+        data["rail"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if tunnel_mesh is not None:     # roadmesh.tunnel: the tubes and portals (colliding)
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"tunnel_{aid}_{tx}_{ty}.cdae"

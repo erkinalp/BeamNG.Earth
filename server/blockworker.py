@@ -379,8 +379,10 @@ def roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, b
         bld = buildingsmod.road_tile(frame, tx, ty, _s.md,
                                      lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)), None, None,
                                      items)
+    rparts = roadsmod.rail_parts(frame, tx, ty, cells, elev)
+    rmesh = roadmeshmod.rail(rparts) if rparts else None
     return roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks if sidewalks else None, mesh, dmesh,
-                               bld, props, wires, park, tunnel_mesh=tmesh)
+                               bld, props, wires, park, tunnel_mesh=tmesh, rail_mesh=rmesh)
 
 
 def _with_plazas(mesh, frame, tx, ty, elev, origin, surface):

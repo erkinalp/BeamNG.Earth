@@ -61,6 +61,55 @@ def lift(part):
     return BALLAST_TOP - 0.02
 
 
+def ranges(s, hit):
+    """(s0, s1) runs of the samples where hit is True, in arc length s (monotonic), merging runs closer than
+    MERGE_M: the stretches of a way that are one thing. Pure."""
+    s = np.asarray(s, np.float64)
+    hit = np.asarray(hit, bool)
+    if len(s) < 2 or not hit.any():
+        return []
+    idx = np.flatnonzero(hit)
+    runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+    out = []
+    for run in runs:
+        a, b = float(s[run[0]]), float(s[run[-1]])
+        if out and a - out[-1][1] <= MERGE_M:
+            out[-1] = (out[-1][0], b)
+        else:
+            out.append((a, b))
+    return out
+
+
+MERGE_M = 0.5              # m: hit runs closer than this are one crossing
+
+
+def _point_segment_distance(px, py, ax, ay, bx, by):
+    """Distance from each point (px, py) to the segment a-b (arrays), vectorised. Pure."""
+    vx, vy = bx - ax, by - ay
+    wx, wy = px - ax, py - ay
+    ln = vx * vx + vy * vy
+    t = np.where(ln > 1e-12, (wx * vx + wy * vy) / np.maximum(ln, 1e-12), 0.0)
+    t = np.clip(t, 0.0, 1.0)
+    dx, dy = wx - t * vx, wy - t * vy
+    return np.hypot(dx, dy)
+
+
+def crossing_ranges(xy, s, roads, margin=0.0):
+    """The stretches of a rail way at grade that a road surface crosses: s ranges where the way is within a road's
+    half width (+ margin) of its centreline. xy (n, 2) the way's samples; s (n,) their arc lengths; roads:
+    [(points (k, 2), half width m)]. Pure — the caller decides which parts may be flushed (a bridge or an
+    embankment over a road is not a level crossing)."""
+    hit = np.zeros(len(xy), bool)
+    for pts, half in roads:
+        pts = np.asarray(pts, np.float64)
+        if len(pts) < 2 or half <= 0:
+            continue
+        for a, b in zip(pts[:-1], pts[1:]):
+            d = _point_segment_distance(xy[:, 0], xy[:, 1], a[0], a[1], b[0], b[1])
+            hit |= d <= float(half) + margin
+    return ranges(s, hit)
+
+
 GRADE, BRIDGE, TUNNEL, EMBANKMENT = 0, 1, 2, 3
 
 
