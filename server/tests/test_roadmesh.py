@@ -91,6 +91,38 @@ class RoadMeshTest(unittest.TestCase):
         self.assertAlmostEqual(area, 11.0 * L, delta=1.0)
 
 
+class StepsTest(unittest.TestCase):
+    def test_treads_and_risers_climb_with_the_way(self):
+        pts = np.array([[0.0, 0.0, 10.0], [10.0, 0.0, 11.2]])
+        P, T, UV, mats, M = roadmesh.steps([{"pts": pts, "w": 3.0, "run": 0.3}])
+        n = int(np.floor(10.0 / 0.3))
+        self.assertEqual(len(T), 4 * n, "a tread and a riser, two triangles each")
+        self.assertEqual(list(mats), [roadmesh.STEPS_MAT])
+        self.assertEqual(set(M.tolist()), {0})
+        self.assertAlmostEqual(P[:, 1].max(), 1.5, places=6, msg="across the way's width")
+        self.assertAlmostEqual(P[:, 1].min(), -1.5, places=6)
+        self.assertAlmostEqual(P[:, 0].min(), 0.0, places=6)
+        self.assertAlmostEqual(P[:, 0].max(), n * 0.3, places=6, msg="the last whole step")
+        self.assertGreaterEqual(P[:, 2].min(), 10.0 - 1e-9, "treads never sink below the way's own ground")
+        self.assertLessEqual(P[:, 2].max(), 11.2 + 1e-9)
+
+    def test_a_flat_way_is_flat(self):
+        pts = np.array([[0.0, 0.0, 5.0], [3.0, 0.0, 5.0]])
+        P, T, _UV, _mats, _M = roadmesh.steps([{"pts": pts, "w": 2.0, "run": 0.3}])
+        self.assertTrue(np.allclose(P[:, 2], 5.0), "no riser where the ground does not rise")
+
+    def test_nothing_for_a_way_shorter_than_a_step(self):
+        self.assertIsNone(roadmesh.steps([{"pts": np.array([[0.0, 0.0, 1.0], [0.1, 0.0, 1.0]]), "w": 2.0}]))
+
+    def test_turns_between_materials(self):
+        a = {"pts": np.array([[0.0, 0.0, 0.0], [5.0, 0.0, 0.4]]), "w": 2.0}
+        b = {"pts": np.array([[0.0, 5.0, 0.0], [5.0, 5.0, 0.4]]), "w": 2.0, "mat": "bne_road_stone"}
+        P, T, _UV, mats, M = roadmesh.steps([a, b])
+        self.assertEqual(mats, [roadmesh.STEPS_MAT, "bne_road_stone"])
+        self.assertEqual(set(M.tolist()), {0, 1})
+        self.assertEqual(len(T), 4 * int(np.floor(5.0 / 0.3)) * 2)
+
+
 class FollowTest(unittest.TestCase):
     """The road surface on the terrain block's own triangles (the user, 2026-10-20: the tyres sank into a road
     drawn 5 cm over the ground)."""

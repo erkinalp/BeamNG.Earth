@@ -914,6 +914,59 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
     return nv
 
 
+STEPS_RUN_M = 0.30         # m, a step's tread along the way
+STEPS_RISE_M = 0.15        # m, a nominal riser (a way's own rise per run wins where it is steeper)
+STEPS_UV_M = 1.0           # m of texture per metre
+STEPS_MAT = "m_gm_concrete_plain"   # gridmap v2's plain concrete (a regular material, usable on a mesh)
+
+
+def steps(parts):
+    """Stairs as one colliding mesh: for every part ({pts: (k, 3) centreline x, y, ground z; w: width m; run:
+    tread m; mat}), treads at the ground's height along the way and risers between them, each a quad across the
+    way's width, so the steps climb with the ground instead of cutting through it. (positions, tris, uvs,
+    materials, tri material index) or None. Pure.
+
+    highway=steps is not a road: roads.road_specs leaves it out, and a decal cannot carry a rise. This is the
+    geometry surface.py's concrete mask is painted under (2026-10-22)."""
+    P, T, UV, tri_mat, mats = [], [], [], [], []
+    nv = 0
+    for part in parts:
+        pts = np.asarray(part["pts"], np.float64)
+        if len(pts) < 2:
+            continue
+        w = float(part.get("w", 3.0))
+        run = float(part.get("run", STEPS_RUN_M))
+        mat = str(part.get("mat", STEPS_MAT))
+        if mat not in mats:
+            mats.append(mat)
+        mi = mats.index(mat)
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts[:, :2], axis=0).T))]
+        if s[-1] < run:
+            continue
+        half = w / 2.0
+        for i in range(max(1, int(math.floor(s[-1] / run)))):
+            s0, s1 = i * run, (i + 1) * run
+            x0, y0, z0 = (float(np.interp(s0, s, pts[:, k])) for k in range(3))
+            x1, y1, z1 = (float(np.interp(s1, s, pts[:, k])) for k in range(3))
+            xa, ya = x1 - x0, y1 - y0
+            ln = math.hypot(xa, ya) or 1.0
+            nx, ny = -ya / ln * half, xa / ln * half        # across the way, half width either side
+            tread = np.array([[x0 + nx, y0 + ny, z0], [x0 - nx, y0 - ny, z0],
+                              [x1 - nx, y1 - ny, z0], [x1 + nx, y1 + ny, z0]])
+            riser = np.array([[x1 - nx, y1 - ny, z0], [x1 + nx, y1 + ny, z0],
+                              [x1 + nx, y1 + ny, z1], [x1 - nx, y1 - ny, z1]])
+            for quad, along0, along1 in ((tread, s0, s1), (riser, s1, s1)):
+                P.append(quad)
+                UV.append(np.array([[0.0, along0 / STEPS_UV_M], [w / STEPS_UV_M, along0 / STEPS_UV_M],
+                                    [w / STEPS_UV_M, along1 / STEPS_UV_M], [0.0, along1 / STEPS_UV_M]]))
+                T.append(np.array([[nv, nv + 1, nv + 2], [nv, nv + 2, nv + 3]]))
+                tri_mat += [mi, mi]
+                nv += 4
+    if not T:
+        return None
+    return (np.concatenate(P), np.concatenate(T), np.concatenate(UV), mats, np.asarray(tri_mat, np.int64))
+
+
 def write(path, mesh):
     P, T, UV, mats, M = mesh
     return cdae.write(path, P, T, uvs=UV, material=mats, tri_materials=M, object_name="road")
